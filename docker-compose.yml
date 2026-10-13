@@ -1,11 +1,11 @@
-﻿services:
+﻿
+services:
   postgres:
     image: postgres:15
-    container_name: nnomm-postgres
     environment:
       POSTGRES_DB: nnomm
       POSTGRES_USER: nnomm
-      POSTGRES_PASSWORD: nnomm
+      POSTGRES_PASSWORD: NnommTest2026_X7
     ports:
       - "5434:5432"
     volumes:
@@ -15,6 +15,42 @@
       interval: 5s
       timeout: 3s
       retries: 10
+
+  app1:
+    build:
+      context: .
+    ports:
+      - "8080:8080"
+    environment:
+      SERVER_PORT: 8080
+      DATABASE_URL: jdbc:postgresql://postgres:5432/nnomm
+      DATABASE_USER: nnomm
+      DATABASE_PASSWORD: NnommTest2026_X7
+      JWT_SECRET: ${JWT_SECRET:-assignment-test-secret-key-at-least-32-bytes-long}
+      WEBHOOK_SECRET: ${WEBHOOK_SECRET:-assignment-webhook-secret-change-before-deploying}
+      CLAIM_TTL_SECONDS: 600
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  app2:
+    build:
+      context: .
+    ports:
+      - "8081:8080"
+    environment:
+      SERVER_PORT: 8080
+      DATABASE_URL: jdbc:postgresql://postgres:5432/nnomm
+      DATABASE_USER: nnomm
+      DATABASE_PASSWORD: NnommTest2026_X7
+      JWT_SECRET: ${JWT_SECRET:-assignment-test-secret-key-at-least-32-bytes-long}
+      WEBHOOK_SECRET: ${WEBHOOK_SECRET:-assignment-webhook-secret-change-before-deploying}
+      CLAIM_TTL_SECONDS: 600
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
 
 volumes:
   nnomm-postgres-data:

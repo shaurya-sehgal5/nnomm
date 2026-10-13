@@ -1,0 +1,82 @@
+
+package com.nnomm.claim
+
+import com.nnomm.config.AuthenticatedUser
+import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertTrue
+import org.junit.jupiter.api.Test
+import org.springframework.beans.factory.annotation.Autowired
+import org.springframework.boot.test.context.SpringBootTest
+import org.springframework.jdbc.core.JdbcTemplate
+import org.springframework.test.context.ActiveProfiles
+import java.util.UUID
+
+@SpringBootTest
+@ActiveProfiles("test")
+class ClaimServiceTests {
+
+    @Autowired
+    lateinit var claimService: ClaimService
+
+    @Autowired
+    lateinit var jdbc: JdbcTemplate
+
+    @Test
+    fun `claim requires a valid idempotency key`() {
+        val user = AuthenticatedUser(UUID.randomUUID(), "customer", null)
+
+        val result = claimService.createClaim(
+            user = user,
+            dealId = UUID.randomUUID(),
+            quantity = 1,
+            idempotencyKey = null
+        )
+
+        assertEquals(400, result.status)
+        assertTrue(result.body.contains("IDEMPOTENCY_KEY_INVALID"))
+    }
+
+    @Test
+    fun `claim quantity must be between one and three`() {
+        val user = AuthenticatedUser(UUID.randomUUID(), "customer", null)
+
+        val result = claimService.createClaim(
+            user = user,
+            dealId = UUID.randomUUID(),
+            quantity = 4,
+            idempotencyKey = "quantity_test"
+        )
+
+        assertEquals(400, result.status)
+        assertTrue(result.body.contains("VALIDATION_FAILED"))
+    }
+
+    @Test
+    fun `restaurant admin cannot create customer claim`() {
+        val user = AuthenticatedUser(
+            UUID.randomUUID(),
+            "restaurant_admin",
+            UUID.randomUUID()
+        )
+
+        val result = claimService.createClaim(
+            user = user,
+            dealId = UUID.randomUUID(),
+            quantity = 1,
+            idempotencyKey = "admin_test"
+        )
+
+        assertEquals(403, result.status)
+        assertTrue(result.body.contains("FORBIDDEN"))
+    }
+
+    @Test
+    fun `missing claim is not returned to a customer`() {
+        val user = AuthenticatedUser(UUID.randomUUID(), "customer", null)
+
+        val claim = claimService.getClaim(UUID.randomUUID(), user)
+
+        assertFalse(claim != null)
+    }
+}
