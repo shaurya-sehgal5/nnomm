@@ -1,0 +1,20 @@
+﻿services:
+  postgres:
+    image: postgres:15
+    container_name: nnomm-postgres
+    environment:
+      POSTGRES_DB: nnomm
+      POSTGRES_USER: nnomm
+      POSTGRES_PASSWORD: nnomm
+    ports:
+      - "5434:5432"
+    volumes:
+      - nnomm-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U nnomm -d nnomm"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  nnomm-postgres-data:
