@@ -37,6 +37,82 @@ class ClaimServiceTests {
         assertTrue(result.body.contains("IDEMPOTENCY_KEY_INVALID"))
     }
 
+@Test
+fun `customer cannot read another customers claim`() {
+    val (claimId, _) = createClaimFixture()
+
+    val otherCustomer = AuthenticatedUser(
+        UUID.randomUUID(),
+        "customer",
+        null
+    )
+
+    assertEquals(null, claimService.getClaim(claimId, otherCustomer))
+}
+
+@Test
+fun `restaurant admin cannot read another restaurants claim`() {
+    val (claimId, _) = createClaimFixture()
+
+    val otherRestaurantAdmin = AuthenticatedUser(
+        UUID.randomUUID(),
+        "restaurant_admin",
+        UUID.randomUUID()
+    )
+
+    assertEquals(
+        null,
+        claimService.getClaim(claimId, otherRestaurantAdmin)
+    )
+}
+
+private fun createClaimFixture(): Pair<UUID, UUID> {
+    val restaurantId = UUID.randomUUID()
+    val dealId = UUID.randomUUID()
+    val claimId = UUID.randomUUID()
+    val customerId = UUID.randomUUID()
+
+    jdbc.update(
+        "INSERT INTO restaurants (id, name) VALUES (?, ?)",
+        restaurantId,
+        "Authorization Test Restaurant"
+    )
+
+    jdbc.update(
+        """
+        INSERT INTO deals (
+            id, restaurant_id, title, price_paise, stock_total,
+            starts_at, ends_at
+        ) VALUES (
+            ?, ?, ?, ?, ?, NOW() - INTERVAL '1 hour',
+            NOW() + INTERVAL '1 hour'
+        )
+        """.trimIndent(),
+        dealId,
+        restaurantId,
+        "Authorization Test Deal",
+        5000,
+        10
+    )
+
+    jdbc.update(
+        """
+        INSERT INTO claims (
+            id, deal_id, customer_id, quantity, amount_paise,
+            status, expires_at, created_at
+        ) VALUES (
+            ?, ?, ?, 1, 5000, 'RESERVED',
+            NOW() + INTERVAL '10 minutes', NOW()
+        )
+        """.trimIndent(),
+        claimId,
+        dealId,
+        customerId
+    )
+
+    return claimId to restaurantId
+}
+
     @Test
     fun `claim quantity must be between one and three`() {
         val user = AuthenticatedUser(UUID.randomUUID(), "customer", null)

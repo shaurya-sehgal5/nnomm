@@ -13,10 +13,19 @@ import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
 import org.junit.jupiter.api.Assertions.assertEquals
 import java.util.UUID
+import com.nnomm.claim.ReservationExpiryService
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+
 
 @SpringBootTest
 @ActiveProfiles("test")
 class PaymentWebhookServiceTests {
+    
+@Autowired
+lateinit var expiryService: ReservationExpiryService
+
 @Autowired
 lateinit var jdbc: JdbcTemplate
     @Autowired
@@ -100,6 +109,76 @@ fun `successful payment with wrong amount needs review`() {
     )
 
     assertEquals("NEEDS_REVIEW", status)
+}
+
+@Test
+fun `payment and expiry race preserves stock`() {
+    val claimId = createReservedClaim(expiresInSeconds = -60)
+
+    val dealId = jdbc.queryForObject(
+        "SELECT deal_id FROM claims WHERE id = ?",
+        UUID::class.java,
+        claimId
+    )!!
+
+    val event = PaymentWebhookRequest(
+        event_id = "evt-race-${UUID.randomUUID()}",
+        event_type = "payment.succeeded",
+        claim_id = claimId,
+        amount_paise = 5000
+    )
+
+    val pool = Executors.newFixedThreadPool(2)
+    val start = CountDownLatch(1)
+
+    try {
+        val payment = pool.submit {
+            check(start.await(10, TimeUnit.SECONDS))
+            service.process(event)
+        }
+
+        val expiry = pool.submit {
+            check(start.await(10, TimeUnit.SECONDS))
+            expiryService.expireReservations()
+        }
+
+        start.countDown()
+
+        payment.get(30, TimeUnit.SECONDS)
+expiry.get(30, TimeUnit.SECONDS)
+
+        val status = jdbc.queryForObject(
+            "SELECT status FROM claims WHERE id = ?",
+            String::class.java,
+            claimId
+        )
+
+        assertEquals("REFUND_PENDING", status)
+
+        val heldUnits = jdbc.queryForObject(
+            """
+            SELECT COALESCE(SUM(quantity), 0)
+            FROM claims
+            WHERE deal_id = ?
+              AND status IN ('RESERVED', 'PAID', 'NEEDS_REVIEW')
+              AND (status <> 'RESERVED' OR expires_at > NOW())
+            """.trimIndent(),
+            Long::class.java,
+            dealId
+        ) ?: 0L
+
+        assertEquals(0L, heldUnits)
+
+        val eventCount = jdbc.queryForObject(
+            "SELECT COUNT(*) FROM payment_events WHERE event_id = ?",
+            Int::class.java,
+            event.event_id
+        )
+
+        assertEquals(1, eventCount)
+    } finally {
+        pool.shutdownNow()
+    }
 }
 
 @Test
