@@ -245,7 +245,7 @@ if (keyInsert == 0) {
             SELECT id, price_paise, stock_total, starts_at, ends_at
             FROM deals
             WHERE id = ?
-            FOR UPDATE
+            FOR NO KEY UPDATE
             """.trimIndent(),
             { rs, _ ->
                 DealRow(

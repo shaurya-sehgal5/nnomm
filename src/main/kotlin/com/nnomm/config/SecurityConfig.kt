@@ -43,13 +43,25 @@ class SecurityConfig(
                     )
                 }
             }
-            .authorizeHttpRequests {
-                it.requestMatchers(
-                    HttpMethod.POST,
-                    "/v1/webhooks/payments"
-                ).permitAll()
-                it.anyRequest().authenticated()
-            }
+            
+
+.authorizeHttpRequests {
+    it.requestMatchers(
+        HttpMethod.POST, "/v1/webhooks/payments"
+    ).permitAll()
+
+    it.requestMatchers(
+        HttpMethod.GET, "/v1/deals/*"
+    ).permitAll()
+
+    it.requestMatchers(
+        "/actuator/health",
+        "/actuator/health/**"
+    ).permitAll()
+
+    it.anyRequest().authenticated()
+}
+
             .addFilterBefore(
                 jwtAuthenticationFilter,
                 UsernamePasswordAuthenticationFilter::class.java

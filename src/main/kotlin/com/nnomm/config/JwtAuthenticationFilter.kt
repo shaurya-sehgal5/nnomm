@@ -34,6 +34,20 @@ class JwtAuthenticationFilter(
         response: HttpServletResponse,
         filterChain: FilterChain
     ) {
+        // Public GET endpoints: no JWT parsing required.
+        val path = request.requestURI
+        if (
+            request.method == "GET" &&
+            (
+                path == "/actuator/health" ||
+                path.startsWith("/actuator/health/") ||
+                Regex("/v1/deals/[^/]+").matches(path)
+            )
+        ) {
+            filterChain.doFilter(request, response)
+            return
+        }
+
         val header = request.getHeader("Authorization")
 
         if (header == null) {
@@ -92,8 +106,6 @@ class JwtAuthenticationFilter(
         )
 
         SecurityContextHolder.getContext().authentication = authentication
-
-        // Keep this outside the JWT parsing try/catch.
         filterChain.doFilter(request, response)
     }
 
