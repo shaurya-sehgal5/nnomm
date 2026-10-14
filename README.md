@@ -1,87 +1,64 @@
 # Nnomm Claim Service
 
-A Kotlin and Spring Boot REST API for managing time-limited deal reservations, inventory, idempotent claim requests, and payment webhooks using PostgreSQL.
+A Kotlin/Spring Boot and PostgreSQL service for flash-deal claims, reservations, and signed payment webhooks.
 
-## Tech Stack
+## Requirements
 
-- Kotlin and Java 21
-- Spring Boot
-- PostgreSQL 15
-- Flyway database migrations
-- JDBC transactions and row-level locking
-- Docker Compose
+- Java 21
+- Docker with Docker Compose
+- PostgreSQL (provided by Docker Compose)
 
-## Prerequisites
-
-- Docker and Docker Compose
-- JDK 21 for running Gradle tests locally
-
-## Configuration
-
-The application supports these environment variables:
-
-| Variable | Purpose |
-|---|---|
-| `DATABASE_URL` | PostgreSQL JDBC connection URL |
-| `DATABASE_USER` | Database username |
-| `DATABASE_PASSWORD` | Database password |
-| `JWT_SECRET` | JWT signing secret |
-| `WEBHOOK_SECRET` | Payment webhook HMAC secret |
-| `CLAIM_TTL_SECONDS` | Reservation time-to-live; defaults to 600 seconds |
-| `SERVER_PORT` | Application port; defaults to 8080 |
-
-Use local development secrets only for testing. Configure strong, private secrets in any deployed environment.
-
-## Run with Docker Compose
+## Run locally
 
 Start the services:
 
 ```bash
-docker compose up --build -d
-```
-
-The Compose configuration starts PostgreSQL and two application instances. The API instances are exposed on ports `8080` and `8081`.
-
-Check service status:
-
-```bash
+docker compose up -d --build
 docker compose ps
+docker compose logs -f
 ```
 
-Stop the services:
+The local development database is exposed on port `5434`; the application instances use ports `8080` and `8081`. Check `compose.yaml` for the exact service names and environment configuration.
 
-```bash
-docker compose down
-```
+## Run tests
 
-To remove the database volume as well, use `docker compose down -v`. This permanently deletes the local database data.
-
-## Run Tests
-
-On Windows PowerShell:
+PowerShell:
 
 ```powershell
+$env:JAVA_TOOL_OPTIONS = "-Duser.timezone=UTC"
+$env:DATABASE_URL = "jdbc:postgresql://localhost:5434/nnomm"
+$env:DATABASE_USER = "nnomm"
+$env:DATABASE_PASSWORD = "<your-local-database-password>"
+
 .\gradlew.bat test --no-daemon --console=plain --max-workers=1
 ```
 
-Ensure PostgreSQL is running and the required database environment variables are configured before running integration tests.
+Never commit real credentials. Configure the webhook signing secret through `WEBHOOK_SECRET`; do not use the development fallback in production.
 
-## API Endpoints
+## Correctness approach
 
-| Method | Endpoint | Purpose |
-|---|---|---|
-| `POST` | `/v1/deals` | Create a deal as a restaurant administrator |
-| `GET` | `/v1/deals/{dealId}` | Retrieve deal information and available stock |
-| `POST` | `/v1/deals/{dealId}/claims` | Reserve deal inventory with an idempotency key |
-| `GET` | `/v1/claims/{claimId}` | Retrieve an authorized claim |
-| `POST` | `/v1/webhooks/payments` | Process signed payment events |
+- Deal-row locking serializes stock allocation across application instances.
+- Idempotency records store completed responses for retries.
+- A partial unique index prevents multiple active claims for one customer and deal.
+- Webhook signatures use the raw request body and a timestamp.
+- Payment events are persisted to make duplicate event delivery idempotent.
 
-Authenticated endpoints require a valid bearer JWT. Claim creation requires an `Idempotency-Key` header. Payment webhooks use the `X-Payment-Signature` header.
+## Assumptions
 
-## Database Migrations
+- Reservation expiry is determined using UTC timestamps.
+- Money is stored as integer paise.
+- A recorded payment failure blocks a later success for the same claim under the current conservative event-ordering policy. A production payment integration should correlate provider payment attempts and use provider event ordering where available.
+- Expired reservations no longer count as held stock.
 
-Flyway applies versioned SQL migrations automatically at application startup.
+## AI assistance
 
-## Design Notes
+AI assistance was used to help review implementation choices, draft tests, troubleshoot the local build, and prepare documentation. All generated changes must be reviewed and understood by the candidate before submission.
 
-See [DESIGN.md](DESIGN.md) for the concurrency model, inventory handling, idempotency strategy, webhook security, and scaling considerations.
+One suggestion not adopted was relying on a Kotlin `synchronized` block or mutex to protect inventory. It cannot coordinate separate service instances; PostgreSQL locking and constraints provide shared enforcement.
+
+## Future improvements
+
+- Add a provider-specific payment-attempt and event-ordering model.
+- Add a repeatable concurrent integration test for payment-versus-expiry races.
+- Add structured metrics for lock waits, stock conflicts, webhook replays, and request latency.
+- Add production-grade secret management and operational health checks.

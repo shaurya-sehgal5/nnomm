@@ -1,33 +1,29 @@
-# Nnomm Claim Service — Design
+# Design Decisions
 
-## 1. Concurrency and Inventory Safety
+## 1. Concurrent claims across instances
 
-PostgreSQL is the source of truth for inventory and claim state. Claim creation runs inside a database transaction and locks the corresponding deal row using `SELECT ... FOR UPDATE`. Requests for the same deal are serialized while the service expires stale reservations, checks existing active claims, calculates held stock, and creates a reservation. This prevents concurrent requests from overselling inventory across multiple application instances.
+`ClaimService.createClaim` locks the deal row using `SELECT ... FOR NO KEY UPDATE`. Requests for the same deal serialize at PostgreSQL, including requests handled by different application instances. Each request then expires old reservations, checks for an existing active claim, calculates held stock, and inserts the reservation in a transaction. A JVM mutex would only coordinate threads inside one process and cannot protect a second instance. The partial unique index `uq_claims_active_customer_deal` adds database-level protection against duplicate active claims per customer and deal.
 
-A reservation holds inventory while its status is `RESERVED` and its expiry time is in the future. Successful payment transitions it to `PAID`. Expiry transitions it to `EXPIRED` and releases the held inventory. `NEEDS_REVIEW` continues to hold inventory, while `REFUND_PENDING` does not. Database constraints and indexes provide additional protection.
+## 2. Idempotency after a crash
 
-## 2. Idempotency and Crash Recovery
+The idempotency record, claim, and stored response are written in the same database transaction. If the transaction commits but the HTTP response is lost, a retry with the same customer and key returns the stored response. If the transaction rolls back before commit, the retry can execute the request again. A request still being processed receives a conflict response rather than creating a second claim.
 
-Idempotency records are scoped by customer and key, with a unique database constraint on `(customer_id, idempotency_key)`. The service records the deal and quantity associated with each key. Reusing a key with different parameters returns `422`; completed requests replay their original response, while concurrent requests cannot independently create duplicate claims.
+## 3. Payment and expiry race
 
-The idempotency record and claim response are persisted within the transaction. Incomplete records older than the recovery threshold can be reclaimed, preventing a crashed request from permanently blocking a key. Completed records are retained for the required 24-hour replay window.
+Both paths must serialize updates to the claim row. If payment locks and commits first while the claim is still reserved and unexpired, the status becomes `PAID`; expiry must not change it. If expiry commits first, the status becomes `EXPIRED`; a later successful payment requires `REFUND_PENDING`. If payment arrives after the reservation deadline, it must not consume stock as a paid claim. Stock calculations count paid/review claims and only unexpired reservations. These outcomes rely on transaction ordering and must be verified with a concurrent integration test.
 
-## 3. Payment and Expiry Ordering
+## 4. Webhook signatures
 
-Payment events and claim updates are processed transactionally. The service locks the claim row before deciding its next state. A valid successful payment received before expiry can mark a reservation as `PAID` if the amount matches. An amount mismatch moves the claim to `NEEDS_REVIEW`. A successful payment arriving after expiry moves the claim to `REFUND_PENDING`, because its inventory has already been released. Duplicate event IDs are ignored using a database uniqueness constraint.
+The HMAC is calculated over the exact raw request bytes and timestamp. Parsing and re-serializing JSON can change whitespace, property order, or escaping and would authenticate different bytes. The timestamp limits replay of captured requests. Constant-time signature comparison reduces timing leakage when checking a supplied signature.
 
-## 4. Webhook Authentication and Security
+## 5. Isolation level
 
-Payment webhooks are authenticated with HMAC-SHA256 over the timestamp, a period, and the exact raw request body bytes. The timestamp must be within five minutes of the server time. The supplied signature is compared against the computed signature using a constant-time comparison. Malformed, stale, or invalid signatures are rejected.
+The implementation uses PostgreSQL transactions with row locks and database constraints. The deal lock serializes stock allocation for one deal, while the claim lock serializes payment processing for one claim. The partial unique index prevents duplicate active customer claims even if application logic regresses. Without a shared database lock, concurrent requests could both read the same available stock and oversell it.
 
-Customer and restaurant-admin requests use HS256 JWTs. Authorization checks restrict claim access to the owning customer or an administrator for the associated restaurant. SQL operations use parameterized queries. Secrets, tokens, and signatures must not be written to logs.
+## 6. Most important constraint/index
 
-## 5. Database and Scaling
+`uq_claims_active_customer_deal` enforces one active claim per customer per deal. Dropping it removes the final database guard against duplicate active claims. Stock safety also depends on locking the deal row before reading held quantity and inserting a claim.
 
-PostgreSQL transactions and row-level locks coordinate concurrent requests across both application instances; an in-process mutex would not protect requests handled by different instances. Indexes support deal inventory checks, claim expiry processing, customer claim lookups, idempotency records, and duplicate webhook detection.
+## 7. Traffic grows 100×
 
-At 100 times the traffic, I would first measure database contention and query latency, optimize indexes and connection-pool settings, and move expiry processing to reliable batched workers if needed. I would preserve database-backed inventory coordination and add load tests and operational metrics before introducing more complex distributed infrastructure.
-
-## 6. Operational Configuration
-
-The application uses environment variables for database credentials, JWT and webhook secrets, and reservation TTL. Docker Compose runs two application instances against the same PostgreSQL database. Flyway manages schema migrations so both instances use the same schema.
+The deal row becomes a contention point because all reservations for one deal serialize. PostgreSQL connection capacity and lock wait time would likely become bottlenecks. I would measure lock waits and query latency, improve indexes and connection-pool sizing, and consider atomic inventory allocation or per-deal inventory rows. I would preserve database-enforced invariants rather than move correctness into an in-process lock.

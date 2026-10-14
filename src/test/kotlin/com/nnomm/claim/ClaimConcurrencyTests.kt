@@ -91,7 +91,7 @@ class ClaimConcurrencyTests {
             }
 
             val successful = results.count { it.status == 201 }
-            assertEquals(50, successful)
+            assertEquals(50, successful, "Exactly 50 one-unit claims should succeed")
 
             val held = jdbc.queryForObject(
                 """

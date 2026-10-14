@@ -125,7 +125,25 @@ class PaymentWebhookService(
         )
 
         if (inserted == 0) return 200
-        if (event.event_type == "payment.failed") return 200
+        if (event.event_type == "payment.failed") {
+    return 200
+}
+
+
+val priorFailure = jdbc.queryForObject(
+    """
+    SELECT EXISTS (
+        SELECT 1
+        FROM payment_events
+        WHERE claim_id = ?
+          AND event_type = 'payment.failed'
+    )
+    """.trimIndent(),
+    Boolean::class.java,
+    event.claim_id
+) ?: false
+
+if (priorFailure) return 200
 
         val now = Instant.now()
 
